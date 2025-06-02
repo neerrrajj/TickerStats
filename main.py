@@ -49,7 +49,7 @@ def resample_data(data, frequency, start_day):
 
     return resampled
 
-def calculate_statistics(data, selected_day="All Days", start_date=None, end_date=None):
+def calculate_statistics(data, start_date=None, end_date=None):
     """Calculate comprehensive statistics for the data"""
     if data.empty:
         return {}
@@ -62,12 +62,12 @@ def calculate_statistics(data, selected_day="All Days", start_date=None, end_dat
         data = data[mask]
 
     # Filter by day of week if specified
-    if selected_day != "All Days":
-        day_map = {'Monday': 0, 'Tuesday': 1, 'Wednesday': 2, 'Thursday': 3,
-                  'Friday': 4, 'Saturday': 5, 'Sunday': 6}
-        filtered_data = data[data.index.dayofweek == day_map[selected_day]]
-    else:
-        filtered_data = data
+    # if selected_day != "All Days":
+    #     day_map = {'Monday': 0, 'Tuesday': 1, 'Wednesday': 2, 'Thursday': 3,
+    #               'Friday': 4, 'Saturday': 5, 'Sunday': 6}
+    #     filtered_data = data[data.index.dayofweek == day_map[selected_day]]
+    # else:
+    filtered_data = data
 
     if filtered_data.empty:
         return {}
@@ -249,7 +249,7 @@ def display_statistics_table(stats, title):
 
     # Create organized sections
     sections = {
-        "Range Movement (High - Low)": {
+        "Total Range (High - Low)": {
             "Points": 'range_points',
             "Percentage": 'range_pct'
         },
@@ -349,8 +349,8 @@ def main():
             start_day = None
 
     # Day filter
-    day_filter = st.selectbox("Filter by Day of Week",
-                             ["All Days", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
+    # day_filter = st.selectbox("Filter by Day of Week",
+    #                          ["All Days", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
 
     if st.button("Analyze", type="primary"):
         if symbol and start_date < end_date:
@@ -364,7 +364,7 @@ def main():
                         data = resample_data(data, frequency, start_day)
 
                     # Calculate statistics
-                    stats = calculate_statistics(data, day_filter, start_date, end_date)
+                    stats = calculate_statistics(data, start_date, end_date)
 
                     if stats:
                         # Display summary metrics
@@ -393,7 +393,7 @@ def main():
                         # st.info(f"Verification: {stats.get('green_candles_count', 0)} + {stats.get('red_candles_count', 0)} + {stats.get('flat_candles_count', 0)} = {total_check} (equals Total Trading Days: {stats.get('total_candles', 0)})")
 
                         # Display detailed statistics
-                        display_statistics_table(stats, f"Statistics for {selected_instrument} ({day_filter})")
+                        display_statistics_table(stats, f"Statistics for {selected_instrument}")
                     else:
                         st.error("Unable to calculate statistics. Please check your data selection.")
                 else:
