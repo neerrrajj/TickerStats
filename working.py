@@ -8,8 +8,8 @@ warnings.filterwarnings('ignore')
 
 # Page configuration
 st.set_page_config(
-    page_title="TickerStats",
-    page_icon="🔮",
+    page_title="OHLC Statistics Dashboard",
+    page_icon="📊",
     layout="wide"
 )
 
@@ -49,52 +49,7 @@ def resample_data(data, frequency, start_day):
 
     return resampled
 
-# Helper function with better NaN and zero std handling
-def calc_stats(series, name, is_always_positive=False):
-    series_clean = series.replace([np.inf, -np.inf], np.nan).dropna()
-    if len(series_clean) > 0:
-        mean_val = series_clean.mean()
-        std_val = series_clean.std()
-        min_val = series_clean.min()
-        max_val = series_clean.max()
-
-        # Handle NaN or zero standard deviation
-        if pd.isna(std_val) or std_val == 0:
-            std_val = 0
-            std_ranges = {}
-            for i in [1, 2, 3]:
-                std_ranges[f'{name}_{i}std_lower'] = mean_val
-                std_ranges[f'{name}_{i}std_upper'] = mean_val
-        else:
-            # Calculate std ranges
-            std_ranges = {}
-            for i in [1, 2, 3]:
-                lower = mean_val - (i * std_val)
-                upper = mean_val + (i * std_val)
-
-                # For metrics that are always positive, don't let lower bound go negative
-                if is_always_positive and lower < 0:
-                    lower = 0
-
-                std_ranges[f'{name}_{i}std_lower'] = lower
-                std_ranges[f'{name}_{i}std_upper'] = upper
-
-        return {
-            f'{name}_min': min_val,
-            f'{name}_max': max_val,
-            f'{name}_avg': mean_val,
-            f'{name}_std': std_val,
-            **std_ranges
-        }
-
-    return {
-        f'{name}_min': 0, f'{name}_max': 0, f'{name}_avg': 0, f'{name}_std': 0,
-        f'{name}_1std_lower': 0, f'{name}_1std_upper': 0,
-        f'{name}_2std_lower': 0, f'{name}_2std_upper': 0,
-        f'{name}_3std_lower': 0, f'{name}_3std_upper': 0
-    }
-
-def calculate_statistics(data, start_date=None, end_date=None, pullback_threshold=None, pullback_type="body"):
+def calculate_statistics(data, start_date=None, end_date=None):
     """Calculate comprehensive statistics for the data"""
     if data.empty:
         return {}
@@ -106,6 +61,12 @@ def calculate_statistics(data, start_date=None, end_date=None, pullback_threshol
         mask = (data.index.date >= analysis_start) & (data.index.date <= end_date)
         data = data[mask]
 
+    # Filter by day of week if specified
+    # if selected_day != "All Days":
+    #     day_map = {'Monday': 0, 'Tuesday': 1, 'Wednesday': 2, 'Thursday': 3,
+    #               'Friday': 4, 'Saturday': 5, 'Sunday': 6}
+    #     filtered_data = data[data.index.dayofweek == day_map[selected_day]]
+    # else:
     filtered_data = data
 
     if filtered_data.empty:
@@ -127,13 +88,11 @@ def calculate_statistics(data, start_date=None, end_date=None, pullback_threshol
     df['Gap_Points'] = df['Open'] - df['Prev_Close']
     df['Gap_Pct'] = (df['Gap_Points'] / df['Prev_Close']) * 100
 
+
+
     # Green/Red candles from previous close - needs previous data
     df['Change_From_Prev_Close_Points'] = df['Close'] - df['Prev_Close']
     df['Change_From_Prev_Close_Pct'] = (df['Change_From_Prev_Close_Points'] / df['Prev_Close']) * 100
-
-    # NET CHANGE: (current close - previous close) in points and percentage
-    df['Net_Change_Points'] = df['Close'] - df['Prev_Close']
-    df['Net_Change_Pct'] = (df['Net_Change_Points'] / df['Prev_Close']) * 100
 
     # Now filter to actual requested date range (removing the buffer day)
     if start_date:
@@ -159,74 +118,46 @@ def calculate_statistics(data, start_date=None, end_date=None, pullback_threshol
     df['Green_From_Open_Pct'] = df['Change_From_Open_Pct'].where(df['Change_From_Open_Pct'] > 0, 0)
     df['Red_From_Open_Pct'] = abs(df['Change_From_Open_Pct'].where(df['Change_From_Open_Pct'] < 0, 0))
 
-    # Pullback analysis when threshold is provided
-    if pullback_threshold is not None:
-        # Determine candle direction (green or red from open)
-        df['Candle_Direction'] = np.where(df['Change_From_Open_Points'] > 0, 'green',
-                                        np.where(df['Change_From_Open_Points'] < 0, 'red', 'flat'))
-
-        # Get next candle's OHLC
-        df['Next_Open'] = df['Open'].shift(-1)
-        df['Next_Close'] = df['Close'].shift(-1)
-        df['Next_High'] = df['High'].shift(-1)
-        df['Next_Low'] = df['Low'].shift(-1)
-
-        # Determine next candle's direction
-        df['Next_Change_From_Open'] = df['Next_Close'] - df['Next_Open']
-        df['Next_Candle_Direction'] = np.where(df['Next_Change_From_Open'] > 0, 'green',
-                                             np.where(df['Next_Change_From_Open'] < 0, 'red', 'flat'))
-
-        # Filter based on threshold and type
-        if pullback_type == "body":
-            threshold_condition = df['Body_Pct'] >= pullback_threshold
-        else:  # candle (total range)
-            threshold_condition = df['Range_Pct'] >= pullback_threshold
-
-
-        # Green candle pullback (how low next candle goes)
-        green_threshold_mask = threshold_condition & (df['Candle_Direction'] == 'green')
-
-        # Calculate pullback for green candles - use next candle's low
-        df['Green_Pullback_Points'] = np.where(
-            green_threshold_mask,
-            # np.where(df['Next_Candle_Direction'] == 'red',  # Only if next candle is red
-            #          df['Close'] - df['Next_Low'],  # How much it pulled back down
-            #          0),  # If next candle is green, no pullback
-            df['Next_Low'] - df['Close'],
-            np.nan
-        )
-        df['Green_Pullback_Pct'] = np.where(
-            green_threshold_mask,
-            # np.where(df['Next_Candle_Direction'] == 'red',
-            #          ((df['Next_Low'] - df['Close']) / df['Close']) * 100,
-            #          0),
-            ((df['Next_Low'] - df['Close']) / df['Close']) * 100,
-            np.nan
-        )
-
-        # Red candle pullback (how high next candle goes)
-        red_threshold_mask = threshold_condition & (df['Candle_Direction'] == 'red')
-
-        df['Red_Pullback_Points'] = np.where(
-            red_threshold_mask,
-            # np.where(df['Next_Candle_Direction'] == 'green',  # Only if next candle is green
-            #          df['Next_High'] - df['Close'],  # How much it pulled back up
-            #          0),  # If next candle is red, no pullback
-            df['Next_High'] - df['Close'],
-            np.nan
-        )
-        df['Red_Pullback_Pct'] = np.where(
-            red_threshold_mask,
-            # np.where(df['Next_Candle_Direction'] == 'green',
-            #          ((df['Next_High'] - df['Close']) / df['Close']) * 100,
-            #          0),
-            ((df['Next_High'] - df['Close']) / df['Close']) * 100,
-            np.nan
-        )
-
     # Calculate statistics
     stats = {}
 
+    # Helper function to calculate min, max, avg, std and std ranges
+    def calc_stats(series, name, is_always_positive=False):
+        series_clean = series.replace([np.inf, -np.inf], np.nan).dropna()
+        if len(series_clean) > 0:
+            mean_val = series_clean.mean()
+            std_val = series_clean.std()
+            min_val = series_clean.min()
+            max_val = series_clean.max()
+
+            # Calculate std ranges, but don't let them go below 0 if the metric is always positive
+            std_ranges = {}
+            for i in [1, 2, 3]:
+                lower = mean_val - (i * std_val)
+                upper = mean_val + (i * std_val)
+
+                # For metrics that are always positive (like gaps, body ranges),
+                # don't let the lower bound go negative
+                if is_always_positive and lower < 0:
+                    lower = 0
+
+                std_ranges[f'{name}_{i}std_lower'] = lower
+                std_ranges[f'{name}_{i}std_upper'] = upper
+
+            return {
+                f'{name}_min': min_val,
+                f'{name}_max': max_val,
+                f'{name}_avg': mean_val,
+                f'{name}_std': std_val,
+                **std_ranges
+            }
+
+        return {
+            f'{name}_min': 0, f'{name}_max': 0, f'{name}_avg': 0, f'{name}_std': 0,
+            f'{name}_1std_lower': 0, f'{name}_1std_upper': 0,
+            f'{name}_2std_lower': 0, f'{name}_2std_upper': 0,
+            f'{name}_3std_lower': 0, f'{name}_3std_upper': 0
+        }
 
     # Range statistics (always positive)
     stats.update(calc_stats(df['Range_Points'], 'range_points', is_always_positive=True))
@@ -235,10 +166,6 @@ def calculate_statistics(data, start_date=None, end_date=None, pullback_threshol
     # Body statistics (always positive)
     stats.update(calc_stats(df['Body_Points'], 'body_points', is_always_positive=True))
     stats.update(calc_stats(df['Body_Pct'], 'body_pct', is_always_positive=True))
-
-    # Net change statistics (can be positive or negative)
-    stats.update(calc_stats(df['Net_Change_Points'], 'net_change_points', is_always_positive=False))
-    stats.update(calc_stats(df['Net_Change_Pct'], 'net_change_pct', is_always_positive=False))
 
     # Gap up statistics (always positive when they exist)
     gap_up_data = df[df['Gap_Points'] > 0]
@@ -300,36 +227,6 @@ def calculate_statistics(data, start_date=None, end_date=None, pullback_threshol
             stats[f'red_open_points_{suffix}'] = 0
             stats[f'red_open_pct_{suffix}'] = 0
 
-    # Pullback statistics when threshold is provided
-    if pullback_threshold is not None:
-        # Green candle pullback statistics
-        green_pullback_data = df['Green_Pullback_Points'].replace([np.inf, -np.inf], np.nan).dropna()
-        if len(green_pullback_data) > 0:
-            stats.update(calc_stats(green_pullback_data, 'green_pullback_points'))
-            stats.update(calc_stats(df['Green_Pullback_Pct'].replace([np.inf, -np.inf], np.nan).dropna(), 'green_pullback_pct'))
-            stats['green_pullback_count'] = len(green_pullback_data)
-        else:
-            for suffix in ['min', 'max', 'avg', 'std', '1std_lower', '1std_upper', '2std_lower', '2std_upper', '3std_lower', '3std_upper']:
-                stats[f'green_pullback_points_{suffix}'] = 0
-                stats[f'green_pullback_pct_{suffix}'] = 0
-            stats['green_pullback_count'] = 0
-
-        # Red candle pullback statistics
-        red_pullback_data = df['Red_Pullback_Points'].replace([np.inf, -np.inf], np.nan).dropna()
-        if len(red_pullback_data) > 0:
-            stats.update(calc_stats(red_pullback_data, 'red_pullback_points'))
-            stats.update(calc_stats(df['Red_Pullback_Pct'].replace([np.inf, -np.inf], np.nan).dropna(), 'red_pullback_pct'))
-            stats['red_pullback_count'] = len(red_pullback_data)
-        else:
-            for suffix in ['min', 'max', 'avg', 'std', '1std_lower', '1std_upper', '2std_lower', '2std_upper', '3std_lower', '3std_upper']:
-                stats[f'red_pullback_points_{suffix}'] = 0
-                stats[f'red_pullback_pct_{suffix}'] = 0
-            stats['red_pullback_count'] = 0
-
-        # Count of candles meeting threshold criteria
-        stats['green_threshold_count'] = len(df[threshold_condition & (df['Candle_Direction'] == 'green')])
-        stats['red_threshold_count'] = len(df[threshold_condition & (df['Candle_Direction'] == 'red')])
-
     # Additional interesting statistics
     stats['total_candles'] = len(df)
     stats['green_candles_count'] = len(green_open_data)
@@ -342,7 +239,7 @@ def calculate_statistics(data, start_date=None, end_date=None, pullback_threshol
 
     return stats
 
-def display_statistics_table(stats, title, show_pullback=False, pullback_threshold=None, pullback_type=None):
+def display_statistics_table(stats, title):
     """Display statistics in a formatted table with std ranges"""
     if not stats:
         st.warning("No data available for the selected criteria.")
@@ -359,10 +256,6 @@ def display_statistics_table(stats, title, show_pullback=False, pullback_thresho
         "Body Range (|Close - Open|)": {
             "Points": 'body_points',
             "Percentage": 'body_pct'
-        },
-        "Net Change (Close - Previous Close)": {
-            "Points": 'net_change_points',
-            "Percentage": 'net_change_pct'
         },
         "Gap Up": {
             "Points": 'gap_up_points',
@@ -390,20 +283,6 @@ def display_statistics_table(stats, title, show_pullback=False, pullback_thresho
         }
     }
 
-    # Add pullback sections if requested
-    if show_pullback and pullback_threshold is not None:
-        pullback_sections = {
-            "Green Candle Pullback(-)/Continuation(+)": {
-                "Points": 'green_pullback_points',
-                "Percentage": 'green_pullback_pct'
-            },
-            "Red Candle Pullback(+)/Continuation(-)": {
-                "Points": 'red_pullback_points',
-                "Percentage": 'red_pullback_pct'
-            }
-        }
-        sections.update(pullback_sections)
-
     for section_name, section_data in sections.items():
         st.write(f"**{section_name}**")
 
@@ -415,6 +294,7 @@ def display_statistics_table(stats, title, show_pullback=False, pullback_thresho
                 'Min': f"{stats.get(f'{key_prefix}_min', 0):.1f}",
                 'Max': f"{stats.get(f'{key_prefix}_max', 0):.1f}",
                 'Average': f"{stats.get(f'{key_prefix}_avg', 0):.1f}",
+                # 'Std Dev': f"{stats.get(f'{key_prefix}_std', 0):.1f}",
                 '1σ Range': f"{stats.get(f'{key_prefix}_1std_lower', 0):.1f} to {stats.get(f'{key_prefix}_1std_upper', 0):.1f}",
                 '2σ Range': f"{stats.get(f'{key_prefix}_2std_lower', 0):.1f} to {stats.get(f'{key_prefix}_2std_upper', 0):.1f}",
                 '3σ Range': f"{stats.get(f'{key_prefix}_3std_lower', 0):.1f} to {stats.get(f'{key_prefix}_3std_upper', 0):.1f}"
@@ -426,7 +306,7 @@ def display_statistics_table(stats, title, show_pullback=False, pullback_thresho
         st.write("")
 
 def main():
-    st.title("🔮  Ticker Statistics")
+    st.title("📊 OHLC Statistics Dashboard")
 
     # Input controls
     col1, col2, col3 = st.columns(3)
@@ -468,34 +348,10 @@ def main():
         else:
             start_day = None
 
-    # Pullback analysis controls with proper decimal handling
-    st.subheader("Pullback Analysis (Optional)")
+    # Day filter
+    # day_filter = st.selectbox("Filter by Day of Week",
+    #                          ["All Days", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
 
-    enable_pullback = st.checkbox("Enable Pullback Analysis")
-    col1, col2, col3 = st.columns(3)
-
-    if enable_pullback:
-        with col1:
-            # Use format parameter to prevent floating point precision issues
-            pullback_threshold = st.number_input(
-                "Threshold Percentage",
-                min_value=0.1,
-                max_value=50.0,
-                value=2.0,
-                step=0.1,
-                format="%.1f"
-            )
-
-        with col2:
-            pullback_type = st.selectbox("Threshold Type", ["Body", "Candle"])
-
-        # st.write(f"**Analysis:** When {pullback_type} ≥ {pullback_threshold:.1f}%, what's the opposite pullback in next candle?")
-    else:
-        pullback_threshold = None
-        pullback_type = "body"
-
-    st.text("")
-    st.text("")
     if st.button("Analyze", type="primary"):
         if symbol and start_date < end_date:
             with st.spinner("Loading and analyzing data..."):
@@ -508,7 +364,7 @@ def main():
                         data = resample_data(data, frequency, start_day)
 
                     # Calculate statistics
-                    stats = calculate_statistics(data, start_date, end_date, pullback_threshold, pullback_type)
+                    stats = calculate_statistics(data, start_date, end_date)
 
                     if stats:
                         # Display summary metrics
@@ -519,25 +375,25 @@ def main():
                             st.metric("Green Candles", stats.get('green_candles_count', 0))
                         with col3:
                             st.metric("Red Candles", stats.get('red_candles_count', 0))
+                        # with col4:
+                        #     st.metric("Flat Candles", stats.get('flat_candles_count', 0))
+                        # with col5:
+                        #     st.metric("Green Candles %", f"{stats.get('green_candles_percentage', 0):.1f}%")
 
-                        # Display pullback summary if enabled
-                        if enable_pullback and pullback_threshold is not None:
-                            st.subheader("Pullback Analysis Summary")
-                            col1, col2, col3, col4 = st.columns(4)
-                            with col1:
-                                st.metric(f"Green {pullback_type.title()}s ≥ {pullback_threshold:.1f}%", stats.get('green_threshold_count', 0))
-                            with col2:
-                                st.metric("Green Pullbacks Observed", stats.get('green_pullback_count', 0))
-                            with col3:
-                                st.metric(f"Red {pullback_type.title()}s ≥ {pullback_threshold:.1f}%", stats.get('red_threshold_count', 0))
-                            with col4:
-                                st.metric("Red Pullbacks Observed", stats.get('red_pullback_count', 0))
+                        # col1, col2, col3 = st.columns(3)
+                        # with col1:
+                        #     st.metric("Gap Up Candles", stats.get('gap_up_candles', 0))
+                        # with col2:
+                        #     st.metric("Gap Down Candles", stats.get('gap_down_candles', 0))
+                        # with col3:
+                        #     st.metric("No Gap Candles", stats.get('no_gap_candles', 0))
+
+                        # Verification
+                        # total_check = stats.get('green_candles_count', 0) + stats.get('red_candles_count', 0) + stats.get('flat_candles_count', 0)
+                        # st.info(f"Verification: {stats.get('green_candles_count', 0)} + {stats.get('red_candles_count', 0)} + {stats.get('flat_candles_count', 0)} = {total_check} (equals Total Trading Days: {stats.get('total_candles', 0)})")
 
                         # Display detailed statistics
-                        display_statistics_table(stats, f"Statistics for {selected_instrument}",
-                                               show_pullback=enable_pullback,
-                                               pullback_threshold=pullback_threshold,
-                                               pullback_type=pullback_type)
+                        display_statistics_table(stats, f"Statistics for {selected_instrument}")
                     else:
                         st.error("Unable to calculate statistics. Please check your data selection.")
                 else:
